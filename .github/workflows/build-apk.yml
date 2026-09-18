@@ -1,0 +1,79 @@
+name: Build Mob Check Closed Test APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Reassemble Mob Check project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat MobCheckProject.zip.part00 MobCheckProject.zip.part01 > MobCheckProject.zip
+          echo "8e2192d74cfb26137273e625f6ca95b8432ba8283634a82f8b430d5e73998458  MobCheckProject.zip" | sha256sum -c -
+      - name: Unpack Mob Check project
+        run: |
+          mkdir project
+          unzip -q MobCheckProject.zip -d project
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install dependencies
+        working-directory: project
+        run: npm install
+      - name: Create Android project
+        working-directory: project
+        run: |
+          if [ ! -f android/gradlew ]; then
+            npx cap add android
+          fi
+      - name: Sync Mob Check into Android
+        working-directory: project
+        run: npx cap sync android
+      - name: Install required Android platform
+        working-directory: project
+        shell: bash
+        run: |
+          set -e
+          COMPILE_SDK=$(sed -nE 's/.*compileSdkVersion[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' android/variables.gradle | head -n 1)
+          if [ -z "$COMPILE_SDK" ]; then
+            echo "Could not detect compileSdkVersion"
+            cat android/variables.gradle
+            exit 1
+          fi
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-${COMPILE_SDK}"
+      - name: Apply Mob Check branding
+        working-directory: project
+        run: node tools/apply_android_branding.mjs
+      - name: Apply Minecraft export bridge
+        working-directory: project
+        run: node tools/apply_android_native_export.mjs
+      - name: Build debug APK
+        working-directory: project/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+      - name: Prepare APK
+        run: |
+          mkdir -p dist
+          cp project/android/app/build/outputs/apk/debug/app-debug.apk dist/MobCheck-Closed-Test-debug.apk
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobCheck-Closed-Test-APK
+          path: dist/MobCheck-Closed-Test-debug.apk
+          retention-days: 14
